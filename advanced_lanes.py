@@ -1,11 +1,15 @@
 # Imports
-# =======
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import glob
 import os
+
+# Constants
+# Define conversions in x and y from pixels space to meters
+ym_per_pix = 30/720 # meters per pixel in y dimension
+xm_per_pix = 3.7/650 # meters per pixel in x dimension
 
 # Camera calibration
 def get_calibration_matrix_and_distortion_coefs():
@@ -96,8 +100,9 @@ def warp_image(img):
          [300, img.shape[0]],
          [300, 0]])
     M = cv2.getPerspectiveTransform(src, dst)
+    Minv = cv2.getPerspectiveTransform(dst, src)
     warped = cv2.warpPerspective(img, M, img.shape[1::-1], flags=cv2.INTER_LINEAR)
-    return warped
+    return warped, M, Minv
 
 def find_lines(warped_bin, debug=0, debug_dir='./', img_file='img'):
     # Take a histogram of the bottom half of the image
@@ -111,7 +116,7 @@ def find_lines(warped_bin, debug=0, debug_dir='./', img_file='img'):
     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
 
     # Choose the number of sliding windows
-    nwindows = 9
+    nwindows = 7
     # Set height of windows
     window_height = np.int(warped_bin.shape[0] / nwindows)
     # Identify the x and y positions of all nonzero pixels in the image
@@ -167,6 +172,10 @@ def find_lines(warped_bin, debug=0, debug_dir='./', img_file='img'):
     left_fit = np.polyfit(lefty, leftx, 2)
     right_fit = np.polyfit(righty, rightx, 2)
 
+    # Do the same in world space
+    left_fit_w = np.polyfit(lefty*ym_per_pix, leftx*xm_per_pix, 2)
+    right_fit_w = np.polyfit(righty*ym_per_pix, rightx*xm_per_pix, 2)
+
     # Generate x and y values for plotting
     ploty = np.linspace(0, warped_bin.shape[0] - 1, warped_bin.shape[0])
     left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
@@ -183,31 +192,100 @@ def find_lines(warped_bin, debug=0, debug_dir='./', img_file='img'):
         plt.savefig(debug_dir + 'lines_bin_' + img_file)
         plt.clf()
 
-    return left_fit, right_fit
+    return left_fit, right_fit, left_fit_w, right_fit_w
+
+def measure_curvature(y_eval, left_fit_w, right_fit_w):
+    left_curverad = ((1 + (2 * left_fit_w[0] * y_eval * ym_per_pix + left_fit_w[1]) ** 2) ** 1.5) / np.absolute(2 * left_fit_w[0])
+    right_curverad = ((1 + (2 * right_fit_w[0] * y_eval * ym_per_pix + right_fit_w[1]) ** 2) ** 1.5) / np.absolute(2 * right_fit_w[0])
+    return left_curverad, right_curverad
+
+def compute_distance_to_center(img_shape, left_fit, right_fit, debug=0):
+    left_lane_x = left_fit[0] * img_shape[0] ** 2 + left_fit[1] * img_shape[0] + left_fit[2]
+    right_lane_x = right_fit[0] * img_shape[0] ** 2 + right_fit[1] * img_shape[0] + right_fit[2]
+    dist_to_center = (img_shape[1]/2) - ((right_lane_x + left_lane_x)/2)
+    dist_to_center_w = dist_to_center * xm_per_pix
+    if debug == 1:
+        print('Left lane: {}'.format(left_lane_x))
+        print('Right lane: {}'.format(right_lane_x))
+        print('Distance to center: {}'.format(dist_to_center))
+        print('Distance to center: {:.2f}m'.format(dist_to_center_w))
+        print('')
+    return dist_to_center_w
+
+def display_lane_area(warped, undist, left_fit, right_fit, Minv):
+    # Create an image to draw the lines on
+    warp_zero = np.zeros_like(warped).astype(np.uint8)
+    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+
+    ploty = np.linspace(0, warped.shape[0]-1, num=warped.shape[0])
+    left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+    right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+
+    # Recast the x and y points into usable format for cv2.fillPoly()
+    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+    pts = np.hstack((pts_left, pts_right))
+
+    # Draw the lane onto the warped blank image
+    cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+
+    # Warp the blank back to original image space using inverse perspective matrix (Minv)
+    newwarp = cv2.warpPerspective(color_warp, Minv, (warped.shape[1], warped.shape[0]))
+    # Combine the result with the original image
+    result = cv2.addWeighted(undist, 1, newwarp, 0.3, 0)
+    return result
+
+def display_text_info(img, curverad, distance_to_center_w):
+    cv2.putText(img, 'Radius of curvature: {:7.0f}m'.format(curverad), (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), thickness=2)
+    right_left = 'left'
+    if distance_to_center_w >= 0:
+        right_left = 'right'
+    cv2.putText(img, 'Vehicle is {:5.2f}m {} of center'.format(distance_to_center_w, right_left), (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), thickness=2)
+    return img
 
 # Process image pipeline
 def process_image(img, mtx, dist, debug=0, debug_dir='./', img_file='img'):
     # Distortion correction
     undist = cv2.undistort(img, mtx, dist, None, mtx)
+    if debug == 1:
+        mpimg.imsave(debug_dir + 'undist_' + img_file, undist)
 
     # Color and gradient threshold
-    bin = threshold_image(img, debug=debug, debug_dir=debug_dir, img_file=img_file)
+    bin = threshold_image(undist, debug=debug, debug_dir=debug_dir, img_file=img_file)
     if debug == 1:
         mpimg.imsave(debug_dir + 'thresh_' + img_file, bin, cmap='gray')
 
     # Perspective transform
-    warped = warp_image(img)
-    warped_bin = warp_image(bin)
+    warped_bin, M, Minv = warp_image(bin)
     if debug == 1:
+        warped, M, Minv = warp_image(img)
         mpimg.imsave(debug_dir + 'warped_' + img_file, warped)
         mpimg.imsave(debug_dir + 'warped_bin_' + img_file, warped_bin, cmap='gray')
 
     # Finding the lines
-    find_lines(warped_bin, debug=debug, debug_dir=debug_dir, img_file=img_file)
+    left_fit, right_fit, left_fit_w, right_fit_w = find_lines(warped_bin, debug=debug, debug_dir=debug_dir, img_file=img_file)
 
     # Measure curvature
+    left_curverad, right_curverad = measure_curvature(img.shape[0], left_fit_w, right_fit_w)
+    if debug == 1:
+        print('Image: {}'.format(img_file))
+        print('Left curvature radius: {:.1f}m'.format(left_curverad))
+        print('Right curvature radius: {:.1f}m'.format(right_curverad))
+        print('Average curvature radius: {:.1f}m'.format((left_curverad + right_curverad)/2))
+        print('')
+
+    # Compute distance from center of lane
+    distance_to_center_w = compute_distance_to_center(img.shape, left_fit, right_fit, debug=debug)
 
     # Display lane area
+    undist_with_lane = display_lane_area(warped_bin, undist, left_fit, right_fit, Minv)
+    if debug == 1:
+        mpimg.imsave(debug_dir + 'undist_with_lane_' + img_file, undist_with_lane)
+
+    # Display text info
+    final = display_text_info(undist_with_lane, (left_curverad + right_curverad)/2, distance_to_center_w)
+    if debug == 1:
+        mpimg.imsave(debug_dir + 'final_' + img_file, final)
 
 # Process test images
 def process_test_images(mtx, dist, debug=0, debug_dir='./'):

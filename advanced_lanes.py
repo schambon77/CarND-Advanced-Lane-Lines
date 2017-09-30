@@ -5,6 +5,10 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import glob
 import os
+import imageio
+imageio.plugins.ffmpeg.download()
+from moviepy.editor import VideoFileClip
+import collections
 
 # Constants
 # Define conversions in x and y from pixels space to meters
@@ -87,8 +91,8 @@ def threshold_image(img, debug=0, debug_dir='./', img_file='img'):
         mpimg.imsave(debug_dir + 'thresh_mag_dir_' + img_file, mag_dir_bin, cmap='gray')
     return combined_bin
 
-# Apply perspective transform to image
-def warp_image(img):
+# Get perspective transform matrices
+def get_transform_matrix():
     src = np.float32(
         [[689, 450],
          [1109, 719],
@@ -96,13 +100,17 @@ def warp_image(img):
          [591, 450]])
     dst = np.float32(
         [[950, 0],
-         [950, img.shape[0]],
-         [300, img.shape[0]],
+         [950, 719],
+         [300, 719],
          [300, 0]])
     M = cv2.getPerspectiveTransform(src, dst)
     Minv = cv2.getPerspectiveTransform(dst, src)
+    return M, Minv
+
+# Apply perspective transform to image
+def warp_image(img, M):
     warped = cv2.warpPerspective(img, M, img.shape[1::-1], flags=cv2.INTER_LINEAR)
-    return warped, M, Minv
+    return warped
 
 def find_lines(warped_bin, debug=0, debug_dir='./', img_file='img'):
     # Take a histogram of the bottom half of the image
@@ -194,30 +202,54 @@ def find_lines(warped_bin, debug=0, debug_dir='./', img_file='img'):
 
     return left_fit, right_fit, left_fit_w, right_fit_w
 
+def find_lines_nearby(warped_bin, left_fit, right_fit):
+    nonzero = warped_bin.nonzero()
+    nonzeroy = np.array(nonzero[0])
+    nonzerox = np.array(nonzero[1])
+    margin = 100
+    left_lane_inds = ((nonzerox > (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] - margin))
+                      & (nonzerox < (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy + left_fit[2] + margin)))
+    right_lane_inds = ((nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] - margin))
+                       & (nonzerox < (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] + margin)))
+    # extract left and right line pixel positions
+    leftx = nonzerox[left_lane_inds]
+    lefty = nonzeroy[left_lane_inds]
+    rightx = nonzerox[right_lane_inds]
+    righty = nonzeroy[right_lane_inds]
+    # Fit a second order polynomial to each
+    left_fit_new = np.polyfit(lefty, leftx, 2)
+    right_fit_new = np.polyfit(righty, rightx, 2)
+    # Do the same in world space
+    left_fit_new_w = np.polyfit(lefty*ym_per_pix, leftx*xm_per_pix, 2)
+    right_fit_new_w = np.polyfit(righty*ym_per_pix, rightx*xm_per_pix, 2)
+    return left_fit_new, right_fit_new, left_fit_new_w, right_fit_new_w
+
 def measure_curvature(y_eval, left_fit_w, right_fit_w):
     left_curverad = ((1 + (2 * left_fit_w[0] * y_eval * ym_per_pix + left_fit_w[1]) ** 2) ** 1.5) / np.absolute(2 * left_fit_w[0])
     right_curverad = ((1 + (2 * right_fit_w[0] * y_eval * ym_per_pix + right_fit_w[1]) ** 2) ** 1.5) / np.absolute(2 * right_fit_w[0])
     return left_curverad, right_curverad
 
 def compute_distance_to_center(img_shape, left_fit, right_fit, debug=0):
-    left_lane_x = left_fit[0] * img_shape[0] ** 2 + left_fit[1] * img_shape[0] + left_fit[2]
-    right_lane_x = right_fit[0] * img_shape[0] ** 2 + right_fit[1] * img_shape[0] + right_fit[2]
-    dist_to_center = (img_shape[1]/2) - ((right_lane_x + left_lane_x)/2)
+    left_line_x = left_fit[0] * img_shape[0] ** 2 + left_fit[1] * img_shape[0] + left_fit[2]
+    right_line_x = right_fit[0] * img_shape[0] ** 2 + right_fit[1] * img_shape[0] + right_fit[2]
+    dist_to_center = (img_shape[1]/2) - ((right_line_x + left_line_x)/2)
     dist_to_center_w = dist_to_center * xm_per_pix
+    lane_width_w = (right_line_x - left_line_x) * xm_per_pix
     if debug == 1:
-        print('Left lane: {}'.format(left_lane_x))
-        print('Right lane: {}'.format(right_lane_x))
+        print('Left lane: {}'.format(left_line_x))
+        print('Right lane: {}'.format(right_line_x))
         print('Distance to center: {}'.format(dist_to_center))
         print('Distance to center: {:.2f}m'.format(dist_to_center_w))
+        print('Lane width: {:.2f}m'.format(lane_width_w))
         print('')
-    return dist_to_center_w
+    return dist_to_center_w, lane_width_w
 
-def display_lane_area(warped, undist, left_fit, right_fit, Minv):
+def display_lane_area(undist, left_fit, right_fit, Minv):
     # Create an image to draw the lines on
-    warp_zero = np.zeros_like(warped).astype(np.uint8)
-    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+    img_zero = np.zeros((undist.shape[0], undist.shape[1])).astype(np.uint8)
+    color_warp = np.dstack((img_zero, img_zero, img_zero))
 
-    ploty = np.linspace(0, warped.shape[0]-1, num=warped.shape[0])
+    ploty = np.linspace(0, undist.shape[0]-1, num=undist.shape[0])
     left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
     right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
 
@@ -230,7 +262,7 @@ def display_lane_area(warped, undist, left_fit, right_fit, Minv):
     cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
 
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
-    newwarp = cv2.warpPerspective(color_warp, Minv, (warped.shape[1], warped.shape[0]))
+    newwarp = cv2.warpPerspective(color_warp, Minv, (undist.shape[1], undist.shape[0]))
     # Combine the result with the original image
     result = cv2.addWeighted(undist, 1, newwarp, 0.3, 0)
     return result
@@ -243,8 +275,62 @@ def display_text_info(img, curverad, distance_to_center_w):
     cv2.putText(img, 'Vehicle is {:5.2f}m {} of center'.format(distance_to_center_w, right_left), (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), thickness=2)
     return img
 
+# Define a class to receive the characteristics of each line detection
+class Line():
+    def __init__(self):
+        # was the line detected in the last iteration?
+        self.detected = False
+        # number of successive most recent missed frames
+        self.missed = 0
+        # number of most recent fits used for smoothing
+        self.n = 10
+        # x values of the last n fits of the line
+        #self.recent_xfitted = []
+        #average x values of the fitted line over the last n iterations
+        #self.bestx = None
+        #polynomial coefficients averaged over the last n iterations
+        self.best_fit = None
+        #polynomial coefficients averaged over the last n iterations in world space
+        self.best_fit = None
+        #polynomial coefficients for the most recent fit
+        self.current_fit = [np.array([False])]
+        #polynomial coefficients for the most recent fit in world space
+        self.current_fit_w = [np.array([False])]
+        #polynomial coefficients for the n most recent fit
+        self.recent_fits = collections.deque(maxlen=self.n)
+        #polynomial coefficients for the n most recent fit in world space
+        self.recent_fits_w = collections.deque(maxlen=self.n)
+        #radius of curvature of the line in some units
+        self.radius_of_curvature = None
+        #distance in meters of vehicle center from the line
+        self.line_base_pos = None
+        #difference in fit coefficients between last and new fits
+        #self.diffs = np.array([0,0,0], dtype='float')
+        #x values for detected line pixels
+        #self.allx = None
+        #y values for detected line pixels
+        #self.ally = None
+
+    def validate_current_fit(self):
+        self.recent_fits.append(self.current_fit)
+        self.recent_fits_w.append(self.current_fit_w)
+        self.best_fit = np.mean(self.recent_fits, axis=0)
+        self.best_fit_w = np.mean(self.recent_fits_w, axis=0)
+
+    def increment_missed(self):
+        self.missed += 1
+        if np.any(self.best_fit == None):
+            self.best_fit = self.current_fit
+        if np.any(self.recent_fits_w == None)   :
+            self.best_fit_w = self.current_fit_w
+        if (self.missed == self.n):
+            self.recent_fits.clear()
+            self.recent_fits_w.clear()
+            self.detected = False
+            self.missed = 0
+
 # Process image pipeline
-def process_image(img, mtx, dist, debug=0, debug_dir='./', img_file='img'):
+def process_image(img, mtx, dist, M, Minv, left_line, right_line, debug=0, debug_dir='./', img_file='img'):
     # Distortion correction
     undist = cv2.undistort(img, mtx, dist, None, mtx)
     if debug == 1:
@@ -256,17 +342,40 @@ def process_image(img, mtx, dist, debug=0, debug_dir='./', img_file='img'):
         mpimg.imsave(debug_dir + 'thresh_' + img_file, bin, cmap='gray')
 
     # Perspective transform
-    warped_bin, M, Minv = warp_image(bin)
+    warped_bin = warp_image(bin, M)
     if debug == 1:
-        warped, M, Minv = warp_image(img)
+        warped = warp_image(img, M)
         mpimg.imsave(debug_dir + 'warped_' + img_file, warped)
         mpimg.imsave(debug_dir + 'warped_bin_' + img_file, warped_bin, cmap='gray')
 
-    # Finding the lines
-    left_fit, right_fit, left_fit_w, right_fit_w = find_lines(warped_bin, debug=debug, debug_dir=debug_dir, img_file=img_file)
+    # check if one or both lines have not been previously detected
+    if not left_line.detected or not right_line.detected:
+
+        # Finding the lines
+        left_fit, right_fit, left_fit_w, right_fit_w = find_lines(warped_bin, debug=debug, debug_dir=debug_dir, img_file=img_file)
+
+        # Update lines current fit
+        left_line.detected = True
+        right_line.detected = True
+        left_line.current_fit = left_fit
+        left_line.current_fit_w = left_fit_w
+        right_line.current_fit = right_fit
+        right_line.current_fit_w = right_fit_w
+        print('Find lines')
+
+    else:  #both lines were previously detected
+
+        # Finding the lines nearby based on previous lines
+        left_fit, right_fit, left_fit_w, right_fit_w = find_lines_nearby(warped_bin, left_line.best_fit, right_line.best_fit)
+
+        # Update lines current fit
+        left_line.current_fit = left_fit
+        left_line.current_fit_w = left_fit_w
+        right_line.current_fit = right_fit
+        right_line.current_fit_w = right_fit_w
 
     # Measure curvature
-    left_curverad, right_curverad = measure_curvature(img.shape[0], left_fit_w, right_fit_w)
+    left_curverad, right_curverad = measure_curvature(img.shape[0], left_line.current_fit_w, right_line.current_fit_w)
     if debug == 1:
         print('Image: {}'.format(img_file))
         print('Left curvature radius: {:.1f}m'.format(left_curverad))
@@ -275,10 +384,21 @@ def process_image(img, mtx, dist, debug=0, debug_dir='./', img_file='img'):
         print('')
 
     # Compute distance from center of lane
-    distance_to_center_w = compute_distance_to_center(img.shape, left_fit, right_fit, debug=debug)
+    distance_to_center_w, lane_width_w = compute_distance_to_center(img.shape, left_line.current_fit, right_line.current_fit, debug=debug)
+
+    # Sanity checks to validate current fit
+    if ((lane_width_w > 2)
+        and (lane_width_w < 5)
+        and (left_curverad > 100)
+        and (right_curverad > 100)):
+        left_line.validate_current_fit()
+        right_line.validate_current_fit()
+    else:
+        left_line.increment_missed()
+        right_line.increment_missed()
 
     # Display lane area
-    undist_with_lane = display_lane_area(warped_bin, undist, left_fit, right_fit, Minv)
+    undist_with_lane = display_lane_area(undist, left_line.best_fit, right_line.best_fit, Minv)
     if debug == 1:
         mpimg.imsave(debug_dir + 'undist_with_lane_' + img_file, undist_with_lane)
 
@@ -287,16 +407,46 @@ def process_image(img, mtx, dist, debug=0, debug_dir='./', img_file='img'):
     if debug == 1:
         mpimg.imsave(debug_dir + 'final_' + img_file, final)
 
+    return final
+
 # Process test images
-def process_test_images(mtx, dist, debug=0, debug_dir='./'):
+def process_test_images(mtx, dist, M, Minv, debug=0, debug_dir='./'):
     test_files = os.listdir('./test_images')
     for test_file in test_files:
+        left_line = Line()
+        right_line = Line()
         img_file = './test_images/' + test_file
         img = mpimg.imread(img_file)
-        process_image(img, mtx, dist, debug=debug, debug_dir=debug_dir, img_file=test_file)
+        process_image(img, mtx, dist, M, Minv, left_line, right_line, debug=debug, debug_dir=debug_dir, img_file=test_file)
 
-debug_dir = './test/'
-if not os.path.isdir(debug_dir):
-    os.mkdir(debug_dir)
-mtx, dist = get_calibration_matrix_and_distortion_coefs()
-process_test_images(mtx, dist, debug=1, debug_dir=debug_dir)
+# Process video image
+def process_video_image(img):
+    result = process_image(img, mtx, dist, M, Minv, left_line, right_line, debug=0, debug_dir='./output_video/')
+    return result
+
+# Main function for advanced lane detection
+if __name__ == "__main__":
+    mode = 'video'  #toggle here between test images and videos
+    mtx, dist = get_calibration_matrix_and_distortion_coefs()
+    M, Minv = get_transform_matrix()
+    if mode == 'images':
+        debug_dir = './test/'
+        if not os.path.isdir(debug_dir):
+            os.mkdir(debug_dir)
+        process_test_images(mtx, dist, M, Minv, debug=1, debug_dir=debug_dir)
+    elif mode == 'video':
+        debug_dir = './test_video/'
+        if not os.path.isdir(debug_dir):
+            os.mkdir(debug_dir)
+        left_line = Line()
+        right_line = Line()
+        output_dir = './output_video/'
+        if not os.path.isdir(output_dir):
+            os.mkdir(output_dir)
+        video_file = 'project_video.mp4'
+        #video_file = 'challenge_video.mp4'
+        #video_file = 'harder_challenge_video.mp4'
+        video_output = output_dir + 'lane_' + video_file
+        clip1 = VideoFileClip(video_file)
+        white_clip = clip1.fl_image(process_video_image)
+        white_clip.write_videofile(video_output, audio=False)

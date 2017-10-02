@@ -13,13 +13,12 @@ The goals / steps of this project are the following:
 
 [//]: # (Image References)
 
-[image1]: ./camera_cal/calibration7.jpeg ""
-[image2]: ./output_images/cal_image_with_corners.jepg "Calibration image with corners drawn"
+[image1]: ./camera_cal/calibration7.jpg "Calibration image"
+[image2]: ./output_images/cal_image_with_corners.jpeg "Calibration image with corners drawn"
 [image3]: ./test_images/test5.jpg "Test image"
 [image4]: ./output_images/undistorted_image.jpeg "Undistorted test image"
-[image4]: ./examples/warped_straight_lines.jpg "Warp Example"
-[image5]: ./examples/color_fit_lines.jpg "Fit Visual"
-[image6]: ./examples/example_output.jpg "Output"
+[image5]: ./output_images/thresh_test5.jpg "Threholded image"
+[image6]: ./output_images/warped_bin_test5.jpg "Warped image"
 [video1]: ./project_video.mp4 "Video"
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
@@ -50,7 +49,7 @@ I then iterate on each image to convert them to gray scale, find the chess board
 
 I record as well the object points corresponding to these corners, as the points of a 9x6 grid. I then apply the `cv2.calibrateCamera()` function to get the calibration matrix and distortion coefficients necessary to later on undistort images.
 
-### Pipeline (single images)
+### Pipeline (single image)
 
 The source code for the pipeline of the treatment of a single image is contained in the function `process_image()`. The function  `get_calibration_matrix_and_distortion_coefs()` is called only once before this function.
 
@@ -64,41 +63,35 @@ To demonstrate this step, I will describe how I apply the distortion correction 
  
 ![alt text][image4]
 
+We can for instance notice that some details have disappeared at the edge of the image due to the undistortion transformation.
+
 #### 2. Describe how (and identify where in your code) you used color transforms, gradients or other methods to create a thresholded binary image.  Provide an example of a binary image result.
 
-I used a combination of color and gradient thresholds to generate a binary image (thresholding steps at lines # through # in `another_file.py`).  Here's an example of my output for this step.  (note: this is not actually from one of the test images)
+In the `threshold_image()` function, I used a combination of different thresholding techniques in order to produce a binary image where the lane lines would stand out. The threshold methods used are:
+* a threshold between 170 and 255 on the S channel after conversion to HLS color space (`hls_select()`)
+* a gradient threshold (Sobel) in x direction between 20 and 100 (`abs_sobel_thresh()`)
+* a gradient magniture threshold between 30 and 100 (`mag_thresh()`)
+* a direction threshold between 0.7 and 1.3 rad (`dir_threshold()`)
 
-![alt text][image3]
+In the combination, I keep pixels both detected by the magnitude and direction thresholds, and use an OR with the thresholded S channel and the x-oriented gradient. Here's the result on the test image:
+
+![alt text][image5]
 
 #### 3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
 
-The code for my perspective transform includes a function called `warper()`, which appears in lines 1 through 8 in the file `example.py` (output_images/examples/example.py) (or, for example, in the 3rd code cell of the IPython notebook).  The `warper()` function takes as inputs an image (`img`), as well as source (`src`) and destination (`dst`) points.  I chose the hardcode the source and destination points in the following manner:
-
-```python
-src = np.float32(
-    [[(img_size[0] / 2) - 55, img_size[1] / 2 + 100],
-    [((img_size[0] / 6) - 10), img_size[1]],
-    [(img_size[0] * 5 / 6) + 60, img_size[1]],
-    [(img_size[0] / 2 + 55), img_size[1] / 2 + 100]])
-dst = np.float32(
-    [[(img_size[0] / 4), 0],
-    [(img_size[0] / 4), img_size[1]],
-    [(img_size[0] * 3 / 4), img_size[1]],
-    [(img_size[0] * 3 / 4), 0]])
-```
-
-This resulted in the following source and destination points:
+The code for my perspective transform involves 2 functions:
+* the `get_transform_matrix()` function is called outside the `process_image()` pipeline function. It uses the source and destination points shown below to generate through the `cv2.getPerspectiveTransform()` function the direct and inverse transformation matrices.
 
 | Source        | Destination   | 
 |:-------------:|:-------------:| 
-| 585, 460      | 320, 0        | 
-| 203, 720      | 320, 720      |
-| 1127, 720     | 960, 720      |
-| 695, 460      | 960, 0        |
+| 689, 450      | 950, 0        | 
+| 1109, 719      | 950, 719      |
+| 187, 719     | 300, 719      |
+| 591, 450      | 300, 0        |
 
-I verified that my perspective transform was working as expected by drawing the `src` and `dst` points onto a test image and its warped counterpart to verify that the lines appear parallel in the warped image.
+* the `warp_image()` function is called within the single image pipeline. It applies the `cv2.warpPerspective()` function on the binary thresholded image using the transformation matrix obtained as indicated above. The result displayed below shows that the lines appear somewhat parallel in the warped image:
 
-![alt text][image4]
+![alt text][image6]
 
 #### 4. Describe how (and identify where in your code) you identified lane-line pixels and fit their positions with a polynomial?
 

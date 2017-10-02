@@ -13,9 +13,10 @@ The goals / steps of this project are the following:
 
 [//]: # (Image References)
 
-[image1]: ./examples/undistort_output.png "Undistorted"
-[image2]: ./test_images/test1.jpg "Road Transformed"
-[image3]: ./examples/binary_combo_example.jpg "Binary Example"
+[image1]: ./camera_cal/calibration7.jpeg ""
+[image2]: ./output_images/cal_image_with_corners.jepg "Calibration image with corners drawn"
+[image3]: ./test_images/test5.jpg "Test image"
+[image4]: ./output_images/undistorted_image.jpeg "Undistorted test image"
 [image4]: ./examples/warped_straight_lines.jpg "Warp Example"
 [image5]: ./examples/color_fit_lines.jpg "Fit Visual"
 [image6]: ./examples/example_output.jpg "Output"
@@ -39,18 +40,29 @@ You're reading it!
 
 The code for this step is contained in the function `get_calibration_matrix_and_distortion_coefs()`.
 
-I first read in all the calibration images found in the camera_cal folder. Here is an example:
+I first read in all the calibration images found in the camera_cal folder. Here is an example where the corners:
 
 ![alt text][image1]
 
-I then iterate on each image to convert them to gray scale, find the chess board corners and append the returned image points to a list. I record as well the object points corresponding to these corners, as the points of a 9x6 grid. I then apply the `cv2.calibrateCamera()` function to get the calibration matrix and distortion coefficients necessary to later on undistort images.
+I then iterate on each image to convert them to gray scale, find the chess board corners with the `cv2.findChessboardCorners()` function and append the returned image points to a list. Here are the detected corners from the previous calibration image:
+
+![alt text][image2]
+
+I record as well the object points corresponding to these corners, as the points of a 9x6 grid. I then apply the `cv2.calibrateCamera()` function to get the calibration matrix and distortion coefficients necessary to later on undistort images.
 
 ### Pipeline (single images)
+
+The source code for the pipeline of the treatment of a single image is contained in the function `process_image()`. The function  `get_calibration_matrix_and_distortion_coefs()` is called only once before this function.
 
 #### 1. Provide an example of a distortion-corrected image.
 
 To demonstrate this step, I will describe how I apply the distortion correction to one of the test images like this one:
-![alt text][image2]
+
+![alt text][image3]
+
+ The calibration matrix and distortion coefficients, passed as arguments to `process_image()` are used with the function  `cv2.undistort()` in order to undistort images. The result is shown here:
+ 
+![alt text][image4]
 
 #### 2. Describe how (and identify where in your code) you used color transforms, gradients or other methods to create a thresholded binary image.  Provide an example of a binary image result.
 

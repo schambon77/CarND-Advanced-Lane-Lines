@@ -22,7 +22,7 @@ The goals / steps of this project are the following:
 [image7]: ./output_images/warped_test5.jpg "Warped image"
 [image8]: ./output_images/lines_bin_test5.jpg "Detected lines"
 [image9]: ./output_images/final_test5.jpg "Image with lane and text info"
-[video1]: ./project_video.mp4 "Video"
+[video1]: ./output_video/lane_project_video.mp4 "Video"
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
 
@@ -130,14 +130,26 @@ The resulting picture can be seen here:
 
 ### Pipeline (video)
 
+For the pipeline on the video, I have implemented the class `Line()` to track the state of the left and right lines detection. Once the `find_lines()` returns a fit, both line instances are marked detected, and the current fits are updated. For the next image frame, the  function `find_lines_nearby()` is called. It uses the fits (in pixel space) as a way to quickly identify potential line pixels, within a margin of 100 pixels left and right. Identified pixels are then used to refresh the line fits, in both pixel and world space.
+
+Simple sanity checks are used to confirm the fits are still valid:
+* the lane width has to be between 2 and 5 m
+* the left and right line curvature have to be above 100m
+If the checks pass, the current fit is validated and used with the last 10 (if available) to compute an average best fit.
+It the check fail, the current fit is discarded and the previous one (if available) is used. After 10 failures to pass fit checks, the lines are marked not detected, which triggers a full detection process through `find_lines()` at the next frame.
+
+Note: more stringent checks should be implemented for the more challenging videos.
+
 #### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
 
-Here's a [link to my video result](./project_video.mp4)
-
----
+Here's a [link to my video result](./output_video/lane_project_video.mp4)
 
 ### Discussion
 
-#### 1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
+#### 1. Briefly discuss any problems / issues you faced in your implementation of this project. Where will your pipeline likely fail?  What could you do to make it more robust?
 
-Here I'll talk about the approach I took, what techniques I used, what worked and why, where the pipeline might fail and how I might improve it if I were going to pursue this project further.  
+In this challenging project, I was glad to take a step by step approach, with additional debugging code to save intermediate images in order to assess the effect of each transform. Although I have extensively reused techniques presented in the course material, this clearly helped me to implement and test the pipeline.
+
+The selection of warping transform points was important, and took me some time to get right.
+
+As can be seen in the video, the main current issue comes from the transition with shadows on the road. I think more targetted focus on this particular kind of pictures, at the thresholding phase, would help, with different color spaces for instance.

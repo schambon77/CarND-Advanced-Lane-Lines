@@ -18,7 +18,10 @@ The goals / steps of this project are the following:
 [image3]: ./test_images/test5.jpg "Test image"
 [image4]: ./output_images/undistorted_image.jpeg "Undistorted test image"
 [image5]: ./output_images/thresh_test5.jpg "Threholded image"
-[image6]: ./output_images/warped_bin_test5.jpg "Warped image"
+[image6]: ./output_images/warped_bin_test5.jpg "Warped binary image"
+[image7]: ./output_images/warped_test5.jpg "Warped image"
+[image8]: ./output_images/lines_bin_test5.jpg "Detected lines"
+[image9]: ./output_images/final_test5.jpg "Image with lane and text info"
 [video1]: ./project_video.mp4 "Video"
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
@@ -93,23 +96,37 @@ The code for my perspective transform involves 2 functions:
 
 ![alt text][image6]
 
+As an additional check, I also apply the `warp_image()` on the test image:
+
+![alt text][image7]
+
 #### 4. Describe how (and identify where in your code) you identified lane-line pixels and fit their positions with a polynomial?
 
-Then I did some other stuff and fit my lane lines with a 2nd order polynomial kinda like this:
+The code used to detect the the lines is contained in the `find_lines()` function. It takes the binary warped image as an input, and then applied the first method presented in the course, with a few changes:
+* computes an histogram on the bottom quarter of the image, to detect the 2 peaks representing the start of the left and right lines; the change from bottom half to bottom quarter was necessary to avoid too much noise towards the middle of the image.
+* iterates upwards over 7 segments to find all potential line pixels, and adjust the center of the lines
+* once all line pixels are supposed to be found, fits a 2nd-order polynomial for each line
+* and performs the same fitting in 'world space' coordinates
+Both types of fit are returned as they will be used for later on for different purposes.
+The plotted fit results are shown on the test image here:
 
-![alt text][image5]
+![alt text][image8]
 
 #### 5. Describe how (and identify where in your code) you calculated the radius of curvature of the lane and the position of the vehicle with respect to center.
 
-I did this in lines # through # in my code in `my_other_file.py`
+The `measure_curvature()` function contains the code to compute the radius of curvature of the lane. I apply the formula presented in the course to both lines fit in world space at the bottom of the image (closest to the car). The 2 curvatures are returned, although the average between the 2 will eventually be displayed on the image (see below).
+
+The `compute_distance_to_center()` function contains code to compute the position of the car with respect to the lane. I simply apply the lines fit (in pixel space) at the bottom of the image (closest to the car), which give me the precise point where the line starts in the picture. From this I can easily compute distance to the center of the lane (middle between lines) and I convert the distance to world space to represent a realistic value. The function returns the distance to the center as well as the lane width (useful for sanity checks).
 
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
-I implemented this step in lines # through # in my code in `yet_another_file.py` in the function `map_lane()`.  Here is an example of my result on a test image:
+The `display_lane_area()` function is used to plot the lane back on the undistorted color image. It uses both left and right fits to compute the entire lines across the image (for all x), which is drawn on a blank image along the pixels in between lines. The function then uses the inverse warping transformation matrix in the `cv2.warpPerspective()` to warp the lane image and project t with some transparency on top of the undistorted color image.
 
-![alt text][image6]
+The `display_text_info()` function is used to add textual information with regards to lane curvature and distance to center on the top of the image.
 
----
+The resulting picture can be seen here:
+
+![alt text][image9]
 
 ### Pipeline (video)
 
